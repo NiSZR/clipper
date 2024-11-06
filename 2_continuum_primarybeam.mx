@@ -1,0 +1,283 @@
+#####
+#   # USER INPUT
+#####
+
+
+TARGET="SPT2349-CII-cy5cy8" # target name
+CUBEIN="SPT2349_deeppointing_band7_CII_USB_noCycle6.image.fits" # main target cube
+CONTIN="SPT2349_deeppointing_band7_cont_LSB_noCycle6.image.fits" # main target continuum map
+PBIN="SPT2349_deeppointing_band7_cont_LSB_noCycle6.image.pb.fits" # main primary beam response map
+CHMIN=9 # min. channel with flux
+CHMAX=214 # max. channel with flux
+RMSFULLCUBE=1.9E-5 # rms of full average cube
+BEAMMJ=0.473 # minor axis of beam, arcsec
+BEAMMI=0.436 # major axis of beam, arcsec
+BEAMPA=39.58 # angle of beam, degree
+FIRSTPASSSNR=2 # DO NOT CHANGE # sigma of first pass error estimation
+FUDGEFACTOR=0.88254 # DO NOT CHANGE # fudge factor for SNR estimation: 4*ln(2)/pi
+BACKGROUNDNPOLY=6 # polynomical order of background correction
+CHCONTMIN=1 # lower channel without line emission
+CHCONTMAX=40 # upper channel without line emission
+
+#
+# --> give model components
+#
+
+#####
+#   # START PROGRAM
+##### 
+
+
+### Clear directory
+rm -rf c0-* i0-* c1-* c2-* i0-* i1-* i2-* ix1*
+
+### Load primary map
+fits in=$CONTIN out=i0 op=xyin # <<<<<<<<<<<< file input
+puthd in=i0/equinox value=2000.0 # update header
+
+### Load mask file
+fits in=$TARGET'-imag-mask.fits' out=i1-mask op=xyin # <<<<<<<<<<<< file input
+
+### Load primary map
+fits in=$PBIN out=i0-pb op=xyin # <<<<<<<<<<<< file input
+puthd in=i0-pb/equinox value=2000.0 # update header
+
+### Load corrected target cube
+fits in=$TARGET'-cube-bgcorr.fits' out=c0-sub op=xyin # <<<<<<<<<<<< file input
+
+
+### --------- bgcorrect continuum map
+
+### Load mask file
+fits in=$TARGET'-cube-bgmodel.fits' out=c1-bowl op=xyin # <<<<<<<<<<<< file input
+moment in=c1-bowl out=i1-bowl mom=-1 'region=images('$CHCONTMIN','$CHCONTMAX')' # get line-free bowl
+### Save mask for quality control
+rm -rf $TARGET'-imag-bgmodelcont.fits'
+fits in=i1-bowl out=$TARGET'-imag-bgmodelcont.fits' op=xyout
+### Subtract cont. bowl model from continuum
+maths out=i0- 'exp=<i0>-<i1-bowl>'
+rm -rf $TARGET'-imag-bgcorr-cont.fits'
+fits in=i0- out=$TARGET'-imag-bgcorr-cont.fits' op=xyout
+
+### --------- Convert continuum map to SNR
+
+### Generate noise map
+# convolve cube with beam kernel
+smooth in=i0- out=i1 type=gaussian fwhm=$BEAMMJ,$BEAMMI pa=$BEAMPA #<<<<<<<<< adapt fwhm and pa
+### Subtract convoluted cube to get flat background
+maths out=i1--rms 'exp=sqrt((<i0>-<i1>)*(<i0>-<i1>))' options=unmask
+maths out=i1-rms 'exp=<i1--rms>+0.0*<i1-mask>'
+
+### Robustly estimate map rms via level fitting
+imfit in=i1-rms out=i1-rms-level object=level spar=0.0001 #options=residual
+### apply beam conversion and fudge factor 
+maths out=ix1-rms-level- 'exp=<i0->/(<i1-rms-level>*2.3548*'$FUDGEFACTOR')'
+puthd in=ix1-rms-level-/bunit value='SNR/beam' type=ascii
+### Save SNR map
+rm -rf $TARGET'-imag-bgcorr-snrcont.fits'
+fits in=ix1-rms-level- out=$TARGET'-imag-bgcorr-snrcont.fits' op=xyout
+rm -rf i1-* ix1*
+
+### --------- Gaussian fitting
+
+#####
+#   # PLEASE PROVIDE PIXEL POSIITONS FOR FITTING WINDOWS AND PEAK FLUX
+##### 
+
+### A+A Cloud  
+echo "Source A (C1) plus A-flare; A''"
+imfit in=i0- out=i-fitA object=gaussian,gaussian spar=0.00362,-0.604,2.84,0.8,0.5,64.5,0.0003,-1.67,2.29,1.332,0.451,52. 'region=boxes(248,268,285,295)'  #options=residual #'region=boxes(214,331,256,360)' 
+
+### BCGC12 
+echo "Source B-C-G-Bext-Bridge-S1"
+imfit in=i0- out=i-fitBCG    object=gaussian,gaussian,gaussian,gaussian,point,point spar=0.004042,0.335,-1.53,0.592,0.469,66.,0.003976,0.779,-2.75,0.634,0.595,80.,0.001529,-0.02,-2.80,0.634,0.55,41.,0.000443,0.939,-1.720,0.9,0.8,-76.,0.00007,0.33,-2.50,0.00012,0.00,-3.37   fix=-,-,-,-,xy,xy #options=residual
+# residuum for C12 and streamer clumps
+imfit in=i0- out=i-fitBCGres object=gaussian,gaussian,gaussian,gaussian,point,point spar=0.004042,0.335,-1.53,0.592,0.469,66.,0.003976,0.779,-2.75,0.634,0.595,80.,0.001529,-0.02,-2.80,0.634,0.55,41.,0.000443,0.939,-1.720,0.9,0.8,-76.,0.00007,0.33,-2.50,0.00012,0.00,-3.37   fix=-,-,-,-,xy,xy options=residual
+
+
+### K 
+echo "Source K (C7)"
+imfit in=i0- out=i-fitK object=gaussian spar=0.000351,1.74,4.21,0.78,0.58,-4. #options=residual #'region=boxes(214,331,256,360)' 
+
+### F 
+echo "Source F (C5)"
+imfit in=i0- out=i-fitF object=gaussian spar=0.00215,-4.94,-3.55,0.777,0.556,8. #options=residual #'region=boxes(214,331,256,360)' 
+
+### L
+echo "Source C11 (L)"
+imfit in=i0- out=i-fitC11 object=gaussian spar=0.00039,-3.04,-3.41,0.8,0.5,-86. 'region=boxes(275,212,297,232)' #fix=ab #options=residual #'region=boxes(214,331,256,360)' 
+
+### I 
+echo "Source I (C9)"
+imfit in=i0- out=i-fitI object=gaussian spar=0.00121,-4.29,-5.84,0.64,0.58,-50. #options=residual #'region=boxes(214,331,256,360)' 
+
+### Q
+#echo "Source C21 (Q)"
+#imfit in=i0- out=i-fitC21 object=gaussian spar=0.000259,4.78,-0.91,0.53,0.33,80. #options=residual #'region=boxes(214,331,256,360)' 
+
+### H  
+echo "Source H (C10)"
+imfit in=i0- out=i-fitH object=gaussian spar=0.000200,5.97,-3.94,0.572,0.536,0. #fix=f #options=residual #'region=boxes(214,331,256,360)' 
+
+### J 
+echo "Source J (C2)"
+imfit in=i0- out=i-fitJ object=gaussian spar=0.000646,4.22,-7.87,1.21,0.656,80.92. #options=residual #'region=boxes(214,331,256,360)' 
+
+### D 
+echo "Source D (C4)"
+imfit in=i0- out=i-fitD object=gaussian spar=0.001632,-10.98,-0.2,0.712,0.620,-42. #options=residual #'region=boxes(214,331,256,360)' 
+
+### E 
+echo "Source E (C8)"
+imfit in=i0- out=i-fitE object=gaussian spar=0.0013542,-12.52,-2.29,0.640,0.513,-35. #options=residual #'region=boxes(214,331,256,360)' 
+
+### Combine models, part 1
+maths out=i-fitSUM 'exp=<i-fitA>+<i-fitBCG>+<i-fitK>+<i-fitF>+<i-fitI>+<i-fitC11>+<i-fitH>+<i-fitJ>+<i-fitD>+<i-fitE>'
+
+
+
+
+### S3 
+echo "Source S3"
+# S1 broad:
+imfit in=i-fitBCGres out=i-fitS3-e object=gaussian spar=0.00007,-1.80,-5.10,0.47,0.44,39. 'region=boxes(263,198,285,214)' #options=residual #'region=boxes(214,331,256,360)' 
+# S1 point-like:
+#imfit in=i-fitBCGres out=i-fitS3-p object=point spar=0.00005,-1.80,-5.10 'region=boxes(263,198,285,214)' #options=residual #'region=boxes(214,331,256,360)' 
+
+
+### N
+echo "Source C14 (N)"
+imfit in=i0- out=i-fitN object=gaussian,point spar=0.0005,4.34,-0.81,0.6,0.4,40,0.0002,4.04,-0.61 fix=-,- #options=residual #'region=boxes(214,331,256,360)' 
+
+### M
+echo "Source M"
+imfit in=i0- out=i-fitM object=point spar=0.0003,5.50,1.25 fix=xy #options=residual #'region=boxes(214,331,256,360)' 
+
+### A-n
+echo "Source A-n"
+imfit in=i0- out=i-fitAn object=point spar=0.0003,-1.286,6.978 fix=- #options=residual #'region=boxes(214,331,256,360)' 
+
+### C-18
+echo "Source C-18"
+imfit in=i0- out=i-fitC18 object=gaussian spar=0.0003,-8.987,8.389,0.6,0.4,40 fix=- 'region=boxes(336,332,354,349)' 
+
+### C-15
+echo "Source C-15"
+imfit in=i0- out=i-fitC15 object=point,point spar=0.0003,-10.683,6.773,0.0002,-10.697,7.301 fix=xy,xy 'region=boxes(356,318,374,339)' 
+
+### R
+echo "Source R"
+imfit in=i0- out=i-fitR object=point spar=0.0001,-3.9,-1.6 fix=xy 'region=boxes(287,233,301,244)' 
+
+
+
+### NL1 409 427
+#echo "Source NL1"
+#imfit in=i0- out=i-fitNL1 object=gaussian spar=0.001315,-15.38,19.84,0.634,0.532,74. #fix=fxyab #options=residual #'region=boxes(214,331,256,360)' 
+
+### C12  --- excluded because it produced a point source
+#### echo "Source C12"
+#### imfit in=i-fitBCGres out=i-fitC12 object=gaussian spar=0.00017,0.939,-1.72,0.473,0.436,-33. fix=ab #options=residual #'region=boxes(214,331,256,360)'  
+
+### Combine models, part 2
+#### maths 'exp=<i-fitSUM>+<i-fitS1>+<i-fitN>+<i-fitC12>' out=i-fitSUM1 # with S1
+maths 'exp=<i-fitSUM>+<i-fitN>+<i-fitM>+<i-fitAn>+<i-fitC18>+<i-fitC15>+<i-fitR>' out=i-fitSUM1 # without S1
+
+### Quality control: residuum
+maths 'exp=<i0->-<i-fitSUM1>' out=i-res
+puthd in=i-res/cunit1 value='deg' #type='ascii'
+puthd in=i-res/cunit2 value='deg' #type='ascii'
+puthd in=i-res/bmaj value=2.29568E-06 type='double'
+puthd in=i-res/bmin value=2.11357E-06 type='double'
+puthd in=i-res/bpa value=3.957758331300E+01 type='double'
+rm -rf $TARGET'-imag-bgcorr-modelcont-residuum.fits'
+fits in=i-res out=$TARGET'-imag-bgcorr-modelcont-residuum.fits' op=xyout
+
+### Save model output
+puthd in=fitSUM1/cunit1 value='deg' #type='ascii'
+puthd in=fitSUM1/cunit2 value='deg' #type='ascii'
+puthd in=fitSUM1/bmaj value=2.29568E-06 type='double'
+puthd in=fitSUM1/bmin value=2.11357E-06 type='double'
+puthd in=fitSUM1/bpa value=3.957758331300E+01 type='double'
+rm -rf $TARGET'-imag-bgcorr-modelcont.fits'
+fits in=i-fitSUM1 out=$TARGET'-imag-bgcorr-modelcont.fits' op=xyout
+
+
+### --------- Apply cont model to target cube
+
+maths 'exp=<c0-sub>-<i-fitSUM1>' out=c1-- options=grow,unmask
+maths 'exp=<c1-->+0.0*<c0-sub>' out=c1--- #### Reapply mask
+puthd in=c1---/equinox value=2000.0 # update header
+puthd in=c1---/cunit3 value='Hz' #type='ascii'
+puthd in=c1---/cunit1 value='deg' #type='ascii'
+puthd in=c1---/cunit2 value='deg' #type='ascii'
+puthd in=c1---/bunit value='Jy/beam' type='ascii'
+puthd in=c1---/restfreq value=3.455600000000E+11 type='double'
+puthd in=c1---/bmaj value=2.29568E-06 type='double'
+puthd in=c1---/bmin value=2.11357E-06 type='double'
+puthd in=c1---/bpa value=3.957758331300E+01 type='double'
+rm -rf $TARGET'-cube-bgcorr-contsub.fits'
+fits in=c1--- out=$TARGET'-cube-bgcorr-contsub.fits' op=xyout
+
+
+### --------- Apply primary beam correction 
+
+### Line cube pbcorr
+maths 'exp=<c1--->/<i0-pb>' out=c1--pb options=grow,unmask
+maths 'exp=<c1--pb>+0.0*<c1--->' out=c1--x- #### Reapply mask
+puthd in=c1--x-/equinox value=2000.0 # update header
+puthd in=c1--x-/cunit3 value='Hz' #type='ascii'
+puthd in=c1--x-/cunit1 value='deg' #type='ascii'
+puthd in=c1--x-/cunit2 value='deg' #type='ascii'
+puthd in=c1--x-/bunit value='Jy/beam' type='ascii'
+puthd in=c1--x-/restfreq value=3.455600000000E+11 type='double'
+puthd in=c1--x-/bmaj value=2.29568E-06 type='double'
+puthd in=c1--x-/bmin value=2.11357E-06 type='double'
+puthd in=c1--x-/bpa value=3.957758331300E+01 type='double'
+rm -rf $TARGET'-cube-bgcorr-contsub-pbcorr.fits'
+fits in=c1--x- out=$TARGET'-cube-bgcorr-contsub-pbcorr.fits' op=xyout
+
+### Continuum image model pbcorr
+maths 'exp=<i-fitSUM1>/<i0-pb>' out=i2--pb options=unmask
+maths 'exp=<i2--pb>+0.0*<i-fitSUM1>' out=i2--- #### Reapply mask
+puthd in=i2---/cunit1 value='deg' #type='ascii'
+puthd in=i2---/cunit2 value='deg' #type='ascii'
+puthd in=i2---/bmaj value=2.29568E-06 type='double'
+puthd in=i2---/bmin value=2.11357E-06 type='double'
+puthd in=i2---/bpa value=3.957758331300E+01 type='double'
+rm -rf $TARGET'-imag-bgcorr-modelcont-pbcorr.fits'
+fits in=i2--- out=$TARGET'-imag-bgcorr-modelcont-pbcorr.fits' op=xyout
+
+### Continuum image pbcorr
+maths 'exp=<i0->/<i0-pb>' out=i1--pb options=unmask
+maths 'exp=<i1--pb>+0.0*<i0->' out=i1--- #### Reapply mask
+puthd in=i1---/cunit1 value='deg' #type='ascii'
+puthd in=i1---/cunit2 value='deg' #type='ascii'
+puthd in=i1---/bmaj value=2.29568E-06 type='double'
+puthd in=i1---/bmin value=2.11357E-06 type='double'
+puthd in=i1---/bpa value=3.957758331300E+01 type='double'
+rm -rf $TARGET'-imag-bgcorr-cont-pbcorr.fits'
+fits in=i1--- out=$TARGET'-imag-bgcorr-cont-pbcorr.fits' op=xyout
+
+
+### Delete intermediate outputs
+rm -rf c0-* i0-* c1-* c2-* i0* i1* i2* ix1* i-*
+
+### Output to console
+echo " "
+echo ".......... written to disk: "$TARGET"-imag-bgmodelcont.fits"
+echo ".......... written to disk: "$TARGET"-imag-bgcorr-cont.fits"
+echo ".......... written to disk: "$TARGET"-imag-bgcorr-cont-pbcorr.fits"
+echo ".......... written to disk: "$TARGET"-imag-bgcorr-snrcont.fits"
+echo ".......... written to disk: "$TARGET"-imag-bgcorr-modelcont.fits"
+echo ".......... written to disk: "$TARGET"-imag-bgcorr-modelcont-pbcorr.fits"
+echo ".......... written to disk: "$TARGET"-imag-bgcorr-modelcont-residuum.fits"
+echo ".......... written to disk: "$TARGET"-cube-bgcorr-contsub.fits"
+echo ".......... written to disk: "$TARGET"-cube-bgcorr-contsub-pbcorr.fits"
+
+
+echo ".......... DONE!"
+
+#####
+#   # END PROGRAM
+##### 

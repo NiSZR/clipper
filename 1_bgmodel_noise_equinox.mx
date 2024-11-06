@@ -1,0 +1,155 @@
+#####
+#   # Purpose
+#####
+
+### --------- Get noise cube
+### --------- Background model to remove CLEAN bowl
+### --------- Apply background model on target cube
+### ATTENTION: unit of spectral axis is required to be in Hz!
+
+#####
+#   # USER INPUT
+#####
+
+
+TARGET="SPT2349-CII-cy5cy8" # target name
+CUBEIN="SPT2349_deeppointing_band7_CII_USB_noCycle6.image.fits" # main target cube
+CONTIN="SPT2349_deeppointing_band7_cont_LSB_noCycle6.image.fits" # main target continuum map
+PBIN="SPT2349_deeppointing_band7_cont_LSB_noCycle6.image.pb.fits" # main primary beam response map
+CHMIN=9 # min. channel with flux
+CHMAX=214 # max. channel with flux
+RMSFULLCUBE=1.9E-5 # rms of full average cube
+BEAMMJ=0.473 # minor axis of beam, arcsec
+BEAMMI=0.436 # major axis of beam, arcsec
+BEAMPA=39.58 # angle of beam, degree
+FIRSTPASSSNR=2.0 # DO NOT CHANGE # sigma of first pass error estimation
+FUDGEFACTOR=0.88254 # DO NOT CHANGE # fudge factor for SNR estimation: 4*ln(2)/pi
+CORRECTIONF=1.0 # Correction factor for specific cube to get rms level correctly
+BACKGROUNDNPOLY=8 # polynomical order of background correction
+
+
+#####
+#   # START PROGRAM
+##### 
+
+
+### Clear directory
+rm -rf c0-* i0-* c1-* c2-* cx2-corr
+
+### Load primary cube
+fits in=$CUBEIN out=c0 op=xyin # <<<<<<<<<<<< file input
+### Update header
+puthd in=c0/equinox value=2000.0 # update header
+puthd in=c0/cunit3 value='Hz' #type='ascii'
+puthd in=c0/cunit1 value='deg' #type='ascii'
+puthd in=c0/cunit2 value='deg' #type='ascii'
+puthd in=c0/bunit value='Jy/beam' type='ascii'
+puthd in=c0/restfreq value=3.455600000000E+11 type='double'
+puthd in=c0/bmaj value=2.29568E-06 type='double'
+puthd in=c0/bmin value=2.11357E-06 type='double'
+puthd in=c0/bpa value=3.957758331300E+01 type='double'
+
+imsub in=c0 out=c0-sub 'region=images('$CHMIN','$CHMAX')'  #<<<<<<<<< remove blank channels
+
+rm -rf c0
+
+
+
+### --------- Get noise cube
+
+### Collapse full cube to get emission
+moment in=c0-sub mom=-1 out=i0-full #### Average full cube 
+
+### Make snr map
+#RMS0=4.5E-5 for collapsed cube #### On *full* cube
+maths out=i0-full-rms 'exp=0.0*<i0-full>+'$RMSFULLCUBE'' #<<<<<<<<
+maths out=i0-full-snr 'exp=<i0-full>/<i0-full-rms>' #### !contains CII flux! 
+
+### Clip out objects for noise map from full channel cube: >2.x sigma
+maths out=c0-sub-mask 'exp=<c0-sub>' 'mask=<i0-full-snr>.lt.'$FIRSTPASSSNR'' options=grow,unmask  #<<<<<<< Clip out continuum for noise map: SNR<2
+maths out=c0-sub--mask 'exp=<c0-sub-mask>+0.0*<c0-sub>'
+maths out=c0-sub--mask-x 'exp=<c0-sub--mask>*0.0+1.0'
+moment in=c0-sub--mask-x mom=-1 out=c0-sub--mask-xx
+### Save mask file
+rm -rf $TARGET'-imag-mask.fits'
+fits in=c0-sub--mask-xx out=$TARGET'-imag-mask.fits' op=xyout
+rm -rf c0-sub--mask-x*
+
+### Generate noise cube
+# convolve cube with beam kernel
+smooth in=c0-sub--mask out=c1 type=gaussian fwhm=$BEAMMJ,$BEAMMI pa=$BEAMPA #<<<<<<<<< adapt fwhm and pa
+### Subtract convoluted cube to get flat background
+maths out=c1-rms 'exp=sqrt((<c0-sub--mask>-<c1>)*(<c0-sub--mask>-<c1>))'
+rm -rf c1
+### Robustly estimate map rms via level fitting
+imfit in=c1-rms out=c1-rms-level object=level spar=0.0001 #options=residual
+### apply beam conversion and fudge factor 
+maths out=cx1-rms-level- 'exp=<c1-rms-level>*2.3548*'$CORRECTIONF'*'$FUDGEFACTOR'' #<<<<<<<<<<<## correction for FWHM/sigma, empirical fudge/factor 0.8923
+### Save noise cube
+rm -rf $TARGET'-cube-noise.fits'
+fits in=cx1-rms-level- out=$TARGET'-cube-noise.fits' op=xyout
+
+
+
+### --------- Background model to remove CLEAN bowl
+
+### Poly-fit on Cont.-clipped CII cube
+impoly in=c0-sub--mask out=c2 order=$BACKGROUNDNPOLY # <<<<<<<<<<< specify polynomial order for fit
+### Poly-fit on (Cont.-clipped -) complementary cube
+maths out=c2- 'exp=(<c0-sub--mask>-<c2>)' options=grow
+rm -rf c2
+impoly in=c2- out=c2-- order=$BACKGROUNDNPOLY'' # <<<<<<<<<<<<NPOLY specify polynomial order for fit/same as above!
+maths out=c2-x 'exp=<c2->' 'mask=<c2-->.lt.('$RMSFULLCUBE'*1e-4)' # <<<<<<<<<<<<STHRESH # mask out complemental regions
+maths out=c2--x 'exp=<c2-->' 'mask=<c2-->.gt.('$RMSFULLCUBE'*1e-4)' # <<<<<<<<<<<<STHRESH # mask out complemental regions
+### Produce BG model cube "cube-bgcorr"
+maths out=c2--x1 'exp=<c2--x>' options=unmask
+maths out=c2-x1 'exp=<c2-x>' options=unmask 
+maths out=c2-x1--x1 'exp=<c0-sub>*0.0+(<c2-x1>-<c2--x1>)' # cfs: apply original mask
+
+### Fix header and save background model cube
+puthd in=c2-x1--x1/cunit3 value='Hz' #type='ascii'
+rm -rf $TARGET'-cube-bgmodel.fits'
+fits in=c2-x1--x1 out=$TARGET'-cube-bgmodel.fits' op=xyout
+
+### Diagnostics: collapsed background model map
+moment in=c2-x1--x1 mom=0 out=i0-bgmodel #### Velo. integrated bg model cube
+rm -rf $TARGET'-imag-bgmodel.fits'
+fits in=i0-bgmodel out=$TARGET'-imag-bgmodel.fits' op=xyout
+
+
+
+### --------- Apply background model on target cube
+
+### Subtract BG model cube from original cube, fix header and save fits
+maths out=cx2-corr 'exp=<c0-sub>*0.0+(<c0-sub>-<c2-x1--x1>)' # reapply original mask
+puthd in=cx2-corr/equinox value=2000.0 # update header
+puthd in=cx2-corr/cunit3 value='Hz' #type='ascii'
+puthd in=cx2-corr/cunit1 value='deg' #type='ascii'
+puthd in=cx2-corr/cunit2 value='deg' #type='ascii'
+puthd in=cx2-corr/bunit value='Jy/beam' type='ascii'
+puthd in=cx2-corr/restfreq value=3.455600000000E+11 type='double'
+puthd in=cx2-corr/bmaj value=2.29568E-06 type='double'
+puthd in=cx2-corr/bmin value=2.11357E-06 type='double'
+puthd in=cx2-corr/bpa value=3.957758331300E+01 type='double'
+rm -rf $TARGET'-cube-bgcorr.fits'
+fits in=cx2-corr out=$TARGET'-cube-bgcorr.fits' op=xyout
+
+
+
+
+### Delete intermediate outputs
+rm -rf cx*
+rm -rf c0-* i0-* c1-* c2-* i0* i1* i2*
+
+### Output to console
+echo " "
+echo ".......... written to disk: "$TARGET"-imag-mask.fits"
+echo ".......... written to disk: "$TARGET"-cube-noise.fits"
+echo ".......... written to disk: "$TARGET"-cube-bgmodel.fits"
+echo ".......... written to disk: "$TARGET"-imag-bgmodel.fits"
+echo ".......... written to disk: "$TARGET"-cube-bgcorr.fits"
+echo ".......... DONE!"
+
+#####
+#   # END PROGRAM
+##### 

@@ -1,0 +1,258 @@
+#####
+#   # USER INPUT
+#####
+
+
+TARGET="SPT2349-CII-cy5cy8" # target name
+CUBEIN="SPT2349_deeppointing_band7_CII_USB_noCycle6.image.fits" # main target cube
+CONTIN="SPT2349_deeppointing_band7_cont_LSB_noCycle6.image.fits" # main target continuum map
+PBIN="SPT2349_deeppointing_band7_cont_LSB_noCycle6.image.pb.fits" # main primary beam response map
+CHMIN=9 # min. channel with flux
+CHMAX=214 # max. channel with flux
+RMSFULLCUBE=1.9E-5 # rms of full average cube
+BEAMMJ=0.473 # minor axis of beam, arcsec
+BEAMMI=0.436 # major axis of beam, arcsec
+BEAMPA=39.58 # angle of beam, degree
+FIRSTPASSSNR=2.0 # DO NOT CHANGE # sigma of first pass error estimation
+FUDGEFACTOR=0.88254 # DO NOT CHANGE # fudge factor for SNR estimation: 4*ln(2)/pi
+BACKGROUNDNPOLY=6 # polynomical order of background correction
+CHCONTMIN=1 # lower channel without line emission
+CHCONTMAX=40 # upper channel without line emission 
+
+CHMOMENTMIN=40 # lower channel to use for moment maps
+CHMOMENTMAX=200 # upper channel to use for moment maps
+DMCLIPLEVEL=2.3 # lower cut level for dilated mask
+DMCLIPCOUNT=1 # min number of pixels to include flux in final map
+FREQ0=358.3890 # zero velocity channel in GHz
+CH0=109 # channel number clostest to FREQ0 in clipped cube, i.e. fullCubeChannel-(CHMIN+CH)
+DELTAV=-13.07 # channel width in km s-1
+
+XCUBESIZE=512 # pixel x-size of cube
+YCUBESIZE=512 # pixel y-size of cube
+CHCHUBESIZE=206 # number of channel in cube
+
+# L
+CHMINMASK1=100 # min. channel with flux of mask 1
+CHMAXMASK1=170 # max. channel with flux of mask 1
+
+XMINMASK1=276 # min. x px positon of mask 1
+XMAXMASK1=298 # max. y px positon of mask 1
+YMINMASK1=212 # min. y px positon of mask 1
+YMAXMASK1=234 # max. y px positon of mask 1 
+
+# S3 1
+CHMINMASK2=115 # min. channel with flux of mask 2
+CHMAXMASK2=140 # max. channel with flux of mask 2
+
+XMINMASK2=270 # min. x px positon of mask 2
+XMAXMASK2=286 # max. y px positon of mask 2
+YMINMASK2=200 # min. y px positon of mask 2
+YMAXMASK2=211 # max. y px positon of mask 2
+
+# S3 2
+CHMINMASK22=55 # min. channel with flux of mask 2
+CHMAXMASK22=70 # max. channel with flux of mask 2
+
+XMINMASK22=270 # min. x px positon of mask 2
+XMAXMASK22=286 # max. y px positon of mask 2
+YMINMASK22=200 # min. y px positon of mask 2
+YMAXMASK22=211 # max. y px positon of mask 2
+
+# LBG3 - north
+CHMINMASK3=130 # min. channel with flux of mask
+CHMAXMASK3=190 # max. channel with flux of mask
+
+XMINMASK3=252 # min. x px positon of mask 3
+XMAXMASK3=275 # max. y px positon of mask 3
+YMINMASK3=185 # min. y px positon of mask 3
+YMAXMASK3=205 # max. y px positon of mask 3
+
+
+#####
+#   # START PROGRAM
+##### 
+
+
+### Clear directory
+rm -rf c0-* i0-* c1-* c2-* i0-* i1-* i2-* ix1*
+
+### Load primary beam map
+fits in=$PBIN out=i0-pb op=xyin # <<<<<<<<<<<< file input
+puthd in=i0-pb/equinox value=2000.0 # update header
+
+### Load corrected, continuum subtraced target cube
+fits in=$TARGET'-cube-bgcorr-contsub.fits' out=c0-sub op=xyin # <<<<<<<<<<<< file input
+
+# fix cube header
+puthd in=c0-sub/cunit3 value="Hz" # update header
+puthd in=c0-sub/cunit1 value="deg" # update header
+puthd in=c0-sub/cunit2 value="deg" # update header
+
+### Load corrected, continuum subtraced target cube
+fits in=$TARGET'-cube-noise.fits' out=c0-n op=xyin # <<<<<<<<<<<< file input
+
+
+
+### --------- dilation masking, rf. Rosolowsky et al. 2006
+
+### 1 Convolve cube with beam kernel
+smooth in=c0-sub out=c0-S type=gaussian fwhm=$BEAMMJ,$BEAMMI pa=$BEAMPA
+
+### 2 Shift cube identify neiboring flux
+# Calculate indexes for shifting
+CHLEN=$(($CHMAX - $CHMIN)) # length of sub-cube
+CHSHIFTM1=$(($CHLEN - 1)) # max-1
+
+imsub in=c0-sub out=c0-1 'region=images(2,'$CHLEN')' 
+imsub in=c0-sub out=c0-0 'region=images(1,'$CHSHIFTM1')' 
+imsub in=c0-S out=c0-S1 'region=images(2,'$CHLEN')'  
+imsub in=c0-S out=c0-S0 'region=images(1,'$CHSHIFTM1')'  
+imsub in=c0-n out=c0-n1 'region=images(2,'$CHLEN')'  
+imsub in=c0-n out=c0-n0 'region=images(1,'$CHSHIFTM1')'  
+
+imsub in=c0-sub out=c0-sub0 'region=images(1,'$CHSHIFTM1')'
+
+### 3 Masking and de-masking for high-significance cube
+# Clip adjecent channels with threshold
+maths out=c0-Sa-prime 'exp=<c0-S0>' 'mask=(<c0-S1>.gt.('$DMCLIPLEVEL'*<c0-n1>)).and.(<c0-S0>.gt.('$DMCLIPLEVEL'*<c0-n0>))'  
+# Set masked values to 0.0 for kerneling; dilate mask with beamsize
+maths out=c0-Sa 'exp=<c0-Sa-prime>' options=unmask
+
+### 4 Dilate by beam size
+smooth in=c0-Sa out=c0-Sa-smooth type=gaussian fwhm=$BEAMMJ,$BEAMMI pa=$BEAMPA
+
+### Clip dilated high-sign. mask
+maths out=c0-Sc 'exp=<c0-Sa-smooth>' 'mask=<c0-Sa-smooth>.gt.('$DMCLIPLEVEL'*<c0-n0>)'
+
+### 4.5 Count number of channels above low-sign. threshold
+maths out=c0-count- 'exp=<c0-Sa-prime>*0.0+'$CHSHIFTM1 #<<<<<<<<<<<<<<<<<<<<<<< number of channels
+maths out=c0-count_ 'exp=<c0-count->' options=unmask
+
+moment out=i0-count- in=c0-count_ mom=-1 # make average, count image
+maths out=i0-count 'exp=<i0-count->' options=unmask # unmask
+maths out=c0-count 'exp=<c0-0>*0.0+<i0-count>' options=grow # regrow to cube to match with other masks
+# Quality control, save clipcount map
+rm -rf $TARGET'-imag-bgcorr-contsub-clipcount.fits'
+fits in=i0-count out=$TARGET'-imag-bgcorr-contsub-clipcount.fits' op=xyout
+
+### 5 Apply low-sign. mask to dilated high-sign. mask onto original cube; output
+maths out=c0-clip 'exp=<c0-sub0>' 'mask=(<c0-S1>.gt.('$DMCLIPLEVEL'*<c0-n1>)).and.(<c0-S0>.gt.('$DMCLIPLEVEL'*<c0-n0>)).and.(<c0-count>.gt.'$DMCLIPCOUNT').and.<c0-Sc>' 
+
+### Apply primary beam correction
+maths 'exp=<c0-clip>/<i0-pb>' out=c0-clip- options=grow,unmask
+maths 'exp=<c0-clip->+0.0*<c0-clip>' out=c0-clip-pb #### Reapply mask
+
+
+### --------- Fix header velocity for moment map
+
+### Clipped cube
+#centered on z=4.303
+puthd in=c0-clip/restfreq 'value='$FREQ0 
+puthd in=c0-clip/crpix3 'value='$CH0 
+puthd in=c0-clip/crval3 value=0.0
+puthd in=c0-clip/cdelt3 'value='$DELTAV 
+puthd in=c0-clip/cunit3 value='KM/S' #type='ascii'
+puthd in=c0-clip/ctype3 value='velo' #type='ascii'
+
+
+### Clipped/PCcorrected cube
+#centered on z=4.303
+puthd in=c0-clip-pb/restfreq 'value='$FREQ0 
+puthd in=c0-clip-pb/crpix3 'value='$CH0 
+puthd n=c0-clip-pb/crval3 value=0.0
+puthd in=c0-clip-pb/cdelt3 'value='$DELTAV 
+puthd in=c0-clip-pb/cunit3 value='KM/S' #type='ascii'
+puthd in=c0-clip-pb/ctype3 value='velo' #type='ascii'
+
+# Save clipped cube
+rm -rf $TARGET'-cube-bgcorr-contsub-clip.fits'
+fits in=c0-clip out=$TARGET'-cube-bgcorr-contsub-clip.fits' op=xyout
+# Save clipped cube
+rm -rf $TARGET'-cube-bgcorr-contsub-clip-pbcorr.fits'
+fits in=c0-clip-pb out=$TARGET'-cube-bgcorr-contsub-clip-pbcorr.fits' op=xyout
+
+
+### Avoid masking out of regions, otherwise comment out:
+maths out=c0-clip-pb-mskx 'exp=<c0-clip-pb>' # <-------------
+
+
+
+### --------- Mask out 3D regions for moment maps
+
+# Mask 1: L
+maths out=c0-clip-pb-msk1 'exp=<c0-clip-pb>' 'mask=(((x.lt.'$XMINMASK1').or.(x.gt.'$XMAXMASK1')).or.((y.lt.'$YMINMASK1').or.(y.gt.'$YMAXMASK1'))).or.((z.lt.'$CHMINMASK1').or.(z.gt.'$CHMAXMASK1'))' 'xrange=0,'$XCUBESIZE 'yrange=0,'$YCUBESIZE 'zrange=0,'$CHCHUBESIZE
+
+# Mask 2: S3 1
+maths out=c0-clip-pb-msk2 'exp=<c0-clip-pb-msk1>' 'mask=(((x.lt.'$XMINMASK2').or.(x.gt.'$XMAXMASK2')).or.((y.lt.'$YMINMASK2').or.(y.gt.'$YMAXMASK2'))).or.((z.lt.'$CHMINMASK2').or.(z.gt.'$CHMAXMASK2'))' 'xrange=0,'$XCUBESIZE 'yrange=0,'$YCUBESIZE 'zrange=0,'$CHCHUBESIZE
+
+# Mask 2-2: S3 2
+maths out=c0-clip-pb-msk22 'exp=<c0-clip-pb-msk2>' 'mask=(((x.lt.'$XMINMASK22').or.(x.gt.'$XMAXMASK22')).or.((y.lt.'$YMINMASK22').or.(y.gt.'$YMAXMASK22'))).or.((z.lt.'$CHMINMASK22').or.(z.gt.'$CHMAXMASK22'))' 'xrange=0,'$XCUBESIZE 'yrange=0,'$YCUBESIZE 'zrange=0,'$CHCHUBESIZE
+
+# Mask 3: LBG3-north
+maths out=c0-clip-pb-mskx 'exp=<c0-clip-pb-msk22>' 'mask=(((x.lt.'$XMINMASK3').or.(x.gt.'$XMAXMASK3')).or.((y.lt.'$YMINMASK3').or.(y.gt.'$YMAXMASK3'))).or.((z.lt.'$CHMINMASK3').or.(z.gt.'$CHMAXMASK3'))' 'xrange=0,'$XCUBESIZE 'yrange=0,'$YCUBESIZE 'zrange=0,'$CHCHUBESIZE
+
+
+
+
+### --------- Make moment maps
+
+### Update heander
+puthd in=c0-clip-pb-mskx/restfreq 'value='$FREQ0
+puthd in=c0-clip-pb-mskx/crpix3 'value='$CH0
+puthd in=c0-clip-pb-mskx/crval3 value=0.0
+puthd in=c0-clip-pb-mskx/cdelt3 'value='$DELTAV
+puthd in=c0-clip-pb-mskx/cunit3 value='KM/S' #type='ascii'
+puthd in=c0-clip-pb-mskx/ctype3 value='VELO' #type='ascii'
+
+# Moment -2 for peak temperature
+moment in=c0-clip-pb-mskx out=i0-clip-m-2  mom=-2 'region=images('$CHMOMENTMIN','$CHMOMENTMAX')'
+rm -rf $TARGET'-imag-bgcorr-contsub-clip-pbcorr-mask-mom-2.fits'
+fits in=i0-clip-m-2 out=$TARGET'-imag-bgcorr-contsub-clip-pbcorr-mask-mom-2.fits' op=xyout
+
+# Moment -1 for clipped surface brightness
+moment in=c0-clip-pb-mskx out=i0-clip-m-1  mom=-1 'region=images('$CHMOMENTMIN','$CHMOMENTMAX')'
+rm -rf $TARGET'-imag-bgcorr-contsub-clip-pbcorr-mask-mom-1.fits'
+fits in=i0-clip-m-1 out=$TARGET'-imag-bgcorr-contsub-clip-pbcorr-mask-mom-1.fits' op=xyout
+
+moment in=c0-clip-pb-mskx out=i0-clip-m0  mom=0 'region=images('$CHMOMENTMIN','$CHMOMENTMAX')'
+rm -rf $TARGET'-imag-bgcorr-contsub-clip-pbcorr-mask-mom0.fits'
+fits in=i0-clip-m0 out=$TARGET'-imag-bgcorr-contsub-clip-pbcorr-mask-mom0.fits' op=xyout
+
+moment in=c0-clip-pb-mskx out=i0-clip-m1  mom=1 'region=images('$CHMOMENTMIN','$CHMOMENTMAX')'
+rm -rf $TARGET'-imag-bgcorr-contsub-clip-pbcorr-mask-mom1.fits'
+fits in=i0-clip-m1 out=$TARGET'-imag-bgcorr-contsub-clip-pbcorr-mask-mom1.fits' op=xyout
+
+moment in=c0-clip-pb-mskx out=i0-clip-m2  mom=2 'region=images('$CHMOMENTMIN','$CHMOMENTMAX')'
+rm -rf $TARGET'-imag-bgcorr-contsub-clip-pbcorr-mask-mom2sigma.fits'
+fits in=i0-clip-m2 out=$TARGET'-imag-bgcorr-contsub-clip-pbcorr-mask-mom2sigma.fits' op=xyout
+
+# Moment 2 in FWHM
+moment in=c0-clip-pb-mskx out=i0-clip-m2fwhm  mom=2 'region=images('$CHMOMENTMIN','$CHMOMENTMAX')'
+maths out=i0-clip-mom2fwhm 'exp=<i0-clip-m2fwhm>*2.35482'
+rm -rf $TARGET'-imag-bgcorr-contsub-clip-pbcorr-mask-mom2.fits'
+fits in=i0-clip-mom2fwhm out=$TARGET'-imag-bgcorr-contsub-clip-pbcorr-mask-mom2.fits' op=xyout
+
+
+
+
+
+### Delete intermediate outputs
+rm -rf c0-* i0-* c1-* c2-* i0* i1* i2* ix1* i-*
+
+### Output to console
+echo " "
+echo ".......... written to disk: "$TARGET"-imag-bgmodelcont.fits"
+echo ".......... written to disk: "$TARGET"-cube-bgcorr-contsub-clip.fits"
+echo ".......... written to disk: "$TARGET"-cube-bgcorr-contsub-clip-pbcorr.fits"
+echo ".......... written to disk: "$TARGET"-imag-bgcorr-contsub-clip-pbcorr-mask-mom-2.fits"
+echo ".......... written to disk: "$TARGET"-imag-bgcorr-contsub-clip-pbcorr-mask-mom-1.fits"
+echo ".......... written to disk: "$TARGET"-imag-bgcorr-contsub-clip-pbcorr-mask-mom0.fits"
+echo ".......... written to disk: "$TARGET"-imag-bgcorr-contsub-clip-pbcorr-mask-mom1.fits"
+echo ".......... written to disk: "$TARGET"-imag-bgcorr-contsub-clip-pbcorr-mask-mom2sigma.fits"
+echo ".......... written to disk: "$TARGET"-imag-bgcorr-contsub-clip-pbcorr-mask-mom2.fits"
+
+echo ".......... DONE!"
+
+#####
+#   # END PROGRAM
+##### 

@@ -1,0 +1,166 @@
+#####
+#   # MESSAGES
+#####
+
+#) Header is broken for the products for unknown reasons.. 
+
+
+#####
+#   # USER INPUT
+#####
+
+TARGET="SPT2349-CII-cy5cy8" # target name
+PBIN="SPT2349_deeppointing_band7_cont_LSB_noCycle6.image.pb.fits" # main primary beam response map
+
+CHMOMENTMIN=40 # lower channel to use for moment maps
+CHMOMENTMAX=200 # upper channel to use for moment maps
+DMCLIPLEVEL=2.3 # lower cut level for dilated mask
+DMCLIPCOUNT=1 # min number of pixels to include flux in final map
+FREQ0=358.3890 # zero velocity channel in GHz
+CH0=109 # channel number clostest to FREQ0 in clipped cube, i.e. fullCubeChannel-(CHMIN+CH)
+DELTAV=-13.07 # channel width in km s-1
+
+#####
+#   # START PROGRAM
+##### 
+
+
+rm -rf c0-* i0-* c1-* c2-* i0-* i1-* i2-* ix1*
+
+### Load primary beam map
+#fits in=$PBIN out=i0-pb op=xyin # <<<<<<<<<<<< file input
+#puthd in=i0-pb/equinox value=2000.0 # update header
+
+### Load corrected, continuum subtraced target cube
+fits in=$TARGET'-cube-bgcorr-contsub.fits' out=c0-sub1 op=xyin # <<<<<<<<<<<< file input
+
+maths out=c0-sub 'exp=<c0-sub1>' 'region=boxes(184,166,333,335)'
+
+moment in=c0-sub out=i0-m0 mom=0
+
+
+# fix cube header
+### Update heander
+#puthd in=c0-sub/ctype3 value="FREQ" type='ascii'
+puthd in=c0-sub/cunit3 value="Hz" #type='ascii' #update header
+#puthd in=c0-sub/restfreq 'value='$FREQ0
+#puthd in=c0-sub/crpix3 'value='$CH0
+#puthd in=c0-sub/crval3 value=0.0
+#puthd in=c0-sub/cdelt3 value=0.0156245
+
+
+
+### Fit parts independently by creating residuals
+
+### B
+# B fit
+imfit in=c0-sub out=c1-Bx  object=gaussian,gaussian  spar=0.003,0.39,-1.55,0.473,0.436,-39.,0.001,0.39,-1.55,0.6,0.6,-39. fix=abp,abp 'region=boxes(62,72,84,87)' #options=residual spar=0.003,0.39,-1.55
+maths out=c1-B 'exp=<c1-Bx>*EXP(-(z-132)**20/(SQRT(2)*30)**20)' zrange=0,205 # window function
+# B res
+maths out=c1-B-res 'exp=<c0-sub>-<c1-B>' #options=grow
+#imfit in=c0-sub out=c1-B-res  object=point spar=0.003,0.39,-1.55 'region=boxes(247,239,264,248)' options=residual
+
+
+### C
+# C fit
+imfit in=c1-B-res out=c1-Cx  object=point,gaussian spar=0.003,0.845,-2.78,0.003,0.845,-2.78,0.63,0.6,-39 fix=-,abp 'region=boxes(55,56,73,71)' #options=residual
+maths out=c1-C 'exp=<c1-Cx>*EXP(-(z-74)**20/(SQRT(2)*25)**20)' zrange=0,205 # window function
+# C res
+maths out=c1-Bres-Cres 'exp=<c1-B-res>-<c1-C>' options=grow
+#imfit in=c0-sub out=c1-B-res  object=point spar=0.003,0.39,-1.55 'region=boxes(247,239,264,248)' options=residual
+
+### C12
+# C12 fit
+imfit in=c1-Bres-Cres out=c1-C12x  object=point spar=0.002,0.86,-1.81 'region=boxes(57,68,74,83)' #options=residual
+maths out=c1-C12 'exp=<c1-C12x>*EXP(-(z-164)**20/(SQRT(2)*14)**20)' zrange=0,205 # window function
+# C12 res
+maths out=c1-Bres-Cres-C12res 'exp=<c1-Bres-Cres>-<c1-C12>' options=grow
+#imfit in=c0-sub out=c1-B-res  object=point spar=0.003,0.39,-1.55 'region=boxes(247,239,264,248)' options=residual
+
+### G
+# G fit
+imfit in=c1-Bres-Cres-C12res out=c1-Gx  object=point spar=0.002,0.0,-2.90 'region=boxes(70,59,85,70)' #options=residual
+maths out=c1-G 'exp=<c1-Gx>*EXP(-(z-91)**20/(SQRT(2)*33)**20)' zrange=0,205 # window function
+# G res
+maths out=c1-Bres-Cres-C12res-Gres 'exp=<c1-Bres-Cres-C12res>-<c1-G>' options=grow
+#imfit in=c0-sub out=c1-B-res  object=point spar=0.003,0.39,-1.55 'region=boxes(247,239,264,248)' options=residual
+
+### Combine
+maths out=c1-sum 'exp=<c1-B>+<c1-C>+<c1-C12>+<c1-G>'
+
+### Collapse combined residual
+moment in=c1-Bres-Cres-C12res-Gres out=i0-BCG mom=0
+
+### Collapse combined model
+moment in=c1-sum out=i0-BCG-sum mom=0
+
+
+### Add window function
+
+
+#imfit in=c0-sub out=c1-B-mod  object=point spar=0.003,0.335,-1.53 'region=boxes(247,238,261,247)' #'region=boxes(206,283,238,310)(45,165)'
+#maths out=c0-fit-B 'exp=<c0-fit-C>*EXP(-(z-65)**20/(SQRT(2)*81/1.6)**20)' zrange=0,198 #### tepering with window function 
+#maths out=c1-B 'exp=<c0-sub>-<c0-fit-B>' #### get residuum
+
+#imfit in=c0-fit-Cres out=c0-fit-G object=gaussian spar=0.003,2.683,0.782,0.493,0.592,-56.4 fix=abp 'region=boxes(226,285,240,295)' #'region=boxes(206,283,238,310)(45,165)'
+#maths out=c0-fit-G1 'exp=<c0-fit-G>*EXP(-(z-85)**20/(SQRT(2)*39/1.4)**20)' zrange=0,198
+#maths out=c0-fit-CGres 'exp=<c0-sub>-<c0-fit-G1>' #### get residuum
+
+#imfit in=c0-fit-CGres out=c0-fit-B    object=gaussian spar=0.008,3.081,2.092,0.493,0.592,-56.4 fix=abp 'region=boxes(218,294,236,313)' #'region=boxes(206,283,238,310)(45,165)'
+#maths out=c0-fit-B1 'exp=<c0-fit-B>*EXP(-(z-126)**20/(SQRT(2)*81/3.0)**20)' zrange=0,198
+#maths out=c0-fit-CGBres 'exp=<c0-sub>-<c0-fit-B1>' #### get residuum C,B
+
+#imfit in=c0-fit-CGBres out=c0-fit-C12    object=gaussian spar=0.005,3.71,1.94,0.493,0.592,-56.4 fix=abp 'region=boxes(210,294,224,313)' #'region=boxes(206,283,238,310)(45,165)'
+#maths out=c0-fit-C121 'exp=<c0-fit-C12>*EXP(-(z-156)**20/(SQRT(2)*20/2.8)**20)' zrange=0,198
+
+
+
+puthd in=c1-B/cunit3 value="HZ" #type='ascii'
+puthd in=c1-C/cunit3 value="HZ" #type='ascii'
+puthd in=c1-C12/cunit3 value="HZ" #type='ascii'
+puthd in=c1-G/cunit3 value="HZ" #type='ascii'
+puthd in=c1-B-res/cunit3 value="HZ" #type='ascii'
+puthd in=c1-Bres-Cres/cunit3 value="HZ" #type='ascii'
+puthd in=c1-Bres-Cres-C12res/cunit3 value="HZ" #type='ascii'
+puthd in=c1-Bres-Cres-C12res-Gres/cunit3 value="HZ" #type='ascii'
+
+
+rm -rf $TARGET'-cube-B.fits'
+fits in=c1-B out=$TARGET'-cube-B.fits' op=xyout
+
+rm -rf $TARGET'-cube-C.fits'
+fits in=c1-C out=$TARGET'-cube-C.fits' op=xyout
+
+rm -rf $TARGET'-cube-C12.fits'
+fits in=c1-C12 out=$TARGET'-cube-C12.fits' op=xyout
+
+rm -rf $TARGET'-cube-G.fits'
+fits in=c1-G out=$TARGET'-cube-G.fits' op=xyout
+
+rm -rf $TARGET'-imag-BCGC12.fits'
+fits in=i0-m0 out=$TARGET'-imag-BCGC12.fits' op=xyout
+
+rm -rf $TARGET'-imag-BCGC12-model.fits'
+fits in=i0-BCG-sum out=$TARGET'-imag-BCGC12-model.fits' op=xyout
+
+rm -rf $TARGET'-cube-BCGC12.fits'
+fits in=c1-sum out=$TARGET'-cube-BCGC12.fits' op=xyout
+
+rm -rf $TARGET'-cube-BCGC12res.fits'
+fits in=c1-Bres-Cres-C12res-Gres out=$TARGET'-cube-BCGC12res.fits' op=xyout
+
+
+
+rm -rf $TARGET'-imag-BCG.fits'
+fits in=i0-BCG out=$TARGET'-imag-BCG.fits' op=xyout
+
+### --------- Delete intermediate files
+
+rm -rf c0-* c1-* c2-* i0-* i1-* i2- i-*
+
+#
+#
+#
+
+echo "********************************************"
+echo "STEP 4 ... DONE!"
